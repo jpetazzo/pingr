@@ -1,6 +1,8 @@
 package main
 
 import (
+	"encoding/base64"
+	"errors"
 	"flag"
 	"fmt"
 	"io/ioutil"
@@ -15,11 +17,13 @@ import (
 )
 
 var (
-	client *collins.Client
-	listen = flag.String("listen", "0.0.0.0:8000", "adress to listen on")
+	client   *collins.Client
+	listen   = flag.String("listen", "0.0.0.0:8000", "adress to listen on")
+	authUser = flag.String("auth.user", "ping", "user for basic auth")
+	authPass = flag.String("auth.pass", "", "password for basic auth")
 
-	user = flag.String("user", "blake", "username")
-	pass = flag.String("pass", "admin:first", "password")
+	user = flag.String("user", "blake", "collins username")
+	pass = flag.String("pass", "admin:first", "collins password")
 	cUrl = flag.String("url", "http://localhost:9000/api", "collins api url")
 
 	assetType   = flag.String("type", "SERVER_NODE", "only assets with this type")
@@ -28,6 +32,9 @@ var (
 	connectionTimeout = flag.Duration("", 5*time.Second, "connect timeout for tests")
 	readWriteTimeout  = flag.Duration("timeout", 5*time.Second, "rw timeout for tests")
 	tests             testUrls
+
+	authHeaderInvalid      = errors.New("Invalid Authorization header")
+	authCredentialsInvalid = errors.New("Invalid user or password")
 )
 
 type testUrls map[string][]string
@@ -119,7 +126,42 @@ func isAlive(tag string) error {
 
 }
 
+func isAuth(r *http.Request) error {
+	parts := strings.Split(r.Header["Authorization"][0], " ")
+	if len(parts) != 2 || parts[0] != "Basic" {
+		return authHeaderInvalid
+	}
+	auth := parts[1]
+	log.Printf("auth header: %s", auth)
+	authStr, err := base64.StdEncoding.DecodeString(auth)
+	if err != nil {
+		return err
+	}
+	parts = strings.Split(string(authStr), ":")
+	if len(parts) != 2 {
+		return authHeaderInvalid
+	}
+	if parts[0] != *authUser || parts[1] != *authPass {
+		return authCredentialsInvalid
+	}
+	return nil
+}
+
 func handler(w http.ResponseWriter, r *http.Request) {
+	if *authPass != "" {
+		if len(r.Header["Authorization"]) == 0 {
+			w.Header().Set("WWW-Authenticate", "Basic realm=\"ping\"")
+			http.Error(w, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
+			return
+		}
+
+		if err := isAuth(r); err != nil {
+			m := fmt.Sprintf("[auth] %s", err)
+			http.Error(w, m, http.StatusUnauthorized)
+			return
+		}
+	}
+
 	path := r.URL.Path[1:]
 	log.Printf("< %s", r.URL)
 	params := &url.Values{}
@@ -153,7 +195,7 @@ func handler(w http.ResponseWriter, r *http.Request) {
 	msgs := ""
 	for i := 0; i < cap(statusChan); i++ {
 		t := "Alive"
-		status := <- statusChan
+		status := <-statusChan
 		if status.err != nil {
 			errors = true
 			t = status.err.Error()
