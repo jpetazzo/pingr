@@ -111,14 +111,23 @@ func isAlive(tag string) error {
 	}
 
 	errChan := make(chan error, len(urls))
+	closeChan := make(chan bool)
 	defer close(errChan)
+	defer close(closeChan)
 	for _, tUrl := range urls {
-		go func(tUrl string) { errChan <- ping(tUrl) }(tUrl)
+		go func(tUrl string) {
+			select {
+			case errChan <- ping(tUrl):
+			case <-closeChan:
+				return
+			}
+		}(tUrl)
 	}
 
 	for i := 0; i < cap(errChan); i++ {
 		err := <-errChan
 		if err != nil {
+			closeChan <- true
 			return err
 		}
 	}
