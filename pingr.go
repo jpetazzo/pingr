@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"github.com/discordianfish/go-collins/collins"
+
+	_ "net/http/pprof"
 )
 
 var (
@@ -65,7 +67,23 @@ func handleError(w http.ResponseWriter, msg string) {
 	http.Error(w, msg, http.StatusInternalServerError)
 }
 
-func ping(tUrl string) error {
+func ping(tUrl *url.URL) error {
+	switch tUrl.Scheme {
+	case "http":
+		return pingHttp(tUrl)
+	case "tcp":
+		return pingTcp(tUrl)
+	default:
+		return fmt.Errorf("Scheme %s not supported", tUrl.Scheme)
+	}
+}
+
+func pingTcp(tUrl *url.URL) error {
+	_, err := net.DialTimeout(tUrl.Scheme, tUrl.Host, *connectionTimeout)
+	return err
+}
+
+func pingHttp(tUrl *url.URL) error {
 	client := &http.Client{
 		Transport: &http.Transport{
 			Dial: func(n, addr string) (net.Conn, error) {
@@ -78,7 +96,7 @@ func ping(tUrl string) error {
 			},
 		},
 	}
-	resp, err := client.Get(tUrl)
+	resp, err := client.Get(tUrl.String())
 	if err != nil {
 		return err
 	}
@@ -102,11 +120,15 @@ func isAlive(tag string) error {
 	if err != nil {
 		return fmt.Errorf("[collins failed] %s", err)
 	}
-	urls := []string{}
+	urls := []*url.URL{}
 	for _, address := range addresses.Data.Addresses {
 		pool := strings.ToLower(address.Pool)
 		for _, tUrl := range tests[pool] {
-			urls = append(urls, fmt.Sprintf(tUrl, address.Address))
+			u, err := url.Parse(fmt.Sprintf(tUrl, address.Address))
+			if err != nil {
+				return err
+			}
+			urls = append(urls, u)
 		}
 	}
 
@@ -115,7 +137,7 @@ func isAlive(tag string) error {
 	defer close(errChan)
 	defer close(closeChan)
 	for _, tUrl := range urls {
-		go func(tUrl string) {
+		go func(tUrl *url.URL) {
 			select {
 			case errChan <- ping(tUrl):
 			case <-closeChan:
@@ -223,7 +245,7 @@ func handler(w http.ResponseWriter, r *http.Request) {
 
 func main() {
 	tests = testUrls{}
-	flag.Var(tests, "t", "specify urls to test per pool in format pool:url")
+	flag.Var(tests, "t", "specify urls to test per pool in format [type:]pool:url")
 	flag.Parse()
 	client = collins.New(*user, *pass, *cUrl)
 
