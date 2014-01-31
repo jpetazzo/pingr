@@ -13,24 +13,39 @@ By setting the `-auth.pass` flag, it will require HTTP basic auth.
 
 # Usage
 
-    Usage of pingr:
+    Usage of ./pingr:
       -=5s: connect timeout for tests
       -auth.pass="": password for basic auth
       -auth.user="ping": user for basic auth
       -listen="0.0.0.0:8000": adress to listen on
       -pass="admin:first": collins password
       -status="Allocated": only assets with this status
-      -t=: specify urls to test per pool in format pool:url
       -timeout=5s: rw timeout for tests
-      -type="SERVER_NODE": only assets with this type
       -url="http://localhost:9000/api": collins api url
       -user="blake": collins username
 
+After starting `pingr`, you can check collins assets based on this path schema:
+
+    /pool/test/port/asset type[/optional/path/to/use/for/http/test][?attributeA=valueA&attributeB=valueB...]
+
+This will find all assets for given `asset type` and optional `attribute`s, get
+their address(es) from `pool` and use `test` on `port` with optional `path`.
+
+# Tests
+Currently there are two tests implemented:
+
+- http: Sends an http request, status code < 200 or > 400 are considered errors
+- tcp: Connects to port, connection failures are considered errors. Path is
+  ignored.
+
 # Example
+This request will check if ssh is reachable on `int` addresses of all
+`server_node` assets with primary role `web` and secondary role `default`:
 
-    pingr -t int:http://%s:8080/ -t dmz:http://%s:443/ --auth.pass=foobar23
+    /int/tcp/22/server_node?primary_role=web&secondary_role=default
 
-Requests to / using the password 'foobar23' will cause pingr to send
-an http request to port 8080 for each address from pool 'int' and
-port 443 for each from pool 'dmz'.
+This would check the assets 'dmz' adresses via http on port `80` with path
+`foo/bar` instead:
+
+    /dmz/tcp/80/server_node/foo/bar?primary_role=web&secondary_role=default
 

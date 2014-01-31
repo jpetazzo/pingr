@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -17,6 +18,8 @@ import (
 
 	_ "net/http/pprof"
 )
+
+const samplePath = "/int/tcp/22/server_node/primary_role;web/secondary_role;default"
 
 var (
 	client   *collins.Client
@@ -28,34 +31,13 @@ var (
 	pass = flag.String("pass", "admin:first", "collins password")
 	cUrl = flag.String("url", "http://localhost:9000/api", "collins api url")
 
-	assetType   = flag.String("type", "SERVER_NODE", "only assets with this type")
-	assetStatus = flag.String("status", "Allocated", "only assets with this status")
-
+	assetStatus       = flag.String("status", "Allocated", "only assets with this status")
 	connectionTimeout = flag.Duration("", 5*time.Second, "connect timeout for tests")
 	readWriteTimeout  = flag.Duration("timeout", 5*time.Second, "rw timeout for tests")
-	tests             testUrls
 
 	authHeaderInvalid      = errors.New("Invalid Authorization header")
 	authCredentialsInvalid = errors.New("Invalid user or password")
 )
-
-type testUrls map[string][]string
-
-func (t testUrls) String() string { return "" }
-
-func (t testUrls) Set(str string) error {
-	parts := strings.SplitN(str, ":", 2)
-	if len(parts) != 2 {
-		return fmt.Errorf("Couldn't parse %s", str)
-	}
-	pool := parts[0]
-	tUrl := parts[1]
-	if t[pool] == nil {
-		t[pool] = []string{}
-	}
-	t[pool] = append(t[pool], tUrl)
-	return nil
-}
 
 type status struct {
 	asset collins.AssetDetails
@@ -115,21 +97,22 @@ func pingHttp(tUrl *url.URL) error {
 	return nil
 }
 
-func isAlive(tag string) error {
+func isAlive(tag, tType string, port int, pool, path string) error {
 	addresses, err := client.GetAssetAddresses(tag)
 	if err != nil {
 		return fmt.Errorf("[collins failed] %s", err)
 	}
+	tUrl := &url.URL{
+		Scheme: tType,
+		Path: path,
+	}
 	urls := []*url.URL{}
 	for _, address := range addresses.Data.Addresses {
-		pool := strings.ToLower(address.Pool)
-		for _, tUrl := range tests[pool] {
-			u, err := url.Parse(fmt.Sprintf(tUrl, address.Address))
-			if err != nil {
-				return err
-			}
-			urls = append(urls, u)
+		if pool != strings.ToLower(address.Pool) {
+			continue
 		}
+		tUrl.Host = fmt.Sprintf("%s:%d", address.Address, port)
+		urls = append(urls, tUrl)
 	}
 
 	errChan := make(chan error, len(urls))
@@ -179,6 +162,7 @@ func isAuth(r *http.Request) error {
 }
 
 func handler(w http.ResponseWriter, r *http.Request) {
+	log.Printf("< %s", r.URL)
 	if *authPass != "" {
 		if len(r.Header["Authorization"]) == 0 {
 			w.Header().Set("WWW-Authenticate", "Basic realm=\"ping\"")
@@ -193,17 +177,40 @@ func handler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	path := r.URL.Path[1:]
-	log.Printf("< %s", r.URL)
+	path := strings.Split(r.URL.Path[1:], "/")
+	if len(path) < 4 {
+		handleError(w, fmt.Sprintf("Invalid path: %s\nTry: %s", r.URL.Path[1:], samplePath))
+		return
+	}
+
+	pool := path[0]
+	tType := path[1]
+	portS := path[2]
+	aType := path[3]
+	tPath := "" 
+	if len(path) > 4 {
+		tPath = strings.Join(path[4:], "/")
+	}
+
 	params := &url.Values{}
-	if *assetType != "" {
-		params.Set("type", *assetType)
+	attributes, err := url.ParseQuery(r.URL.RawQuery)
+	if err != nil {
+		handleError(w, fmt.Sprintf("Invalid attributes: %s", err))
+		return
 	}
-	if *assetStatus != "" {
+	for k, as := range attributes {
+		params.Add("attribute", fmt.Sprintf("%s;%s", k, as[0]))
+	}
+
+	port, err := strconv.Atoi(portS)
+	if err != nil {
+		handleError(w, fmt.Sprintf("Invalid port '%s' in path", portS))
+		return
+	}
+
+	params.Set("type", aType)
+	if params.Get("status") == "" {
 		params.Set("status", *assetStatus)
-	}
-	if path != "" {
-		params.Set("attribute", path)
 	}
 	assets, err := client.FindAssets(params)
 	if err != nil {
@@ -217,7 +224,7 @@ func handler(w http.ResponseWriter, r *http.Request) {
 		go func(asset collins.AssetDetails) {
 			statusChan <- status{
 				asset: asset,
-				err:   isAlive(asset.Asset.Tag),
+				err:   isAlive(asset.Asset.Tag, tType, port, pool, tPath),
 			}
 		}(asset)
 	}
@@ -244,8 +251,6 @@ func handler(w http.ResponseWriter, r *http.Request) {
 }
 
 func main() {
-	tests = testUrls{}
-	flag.Var(tests, "t", "specify urls to test per pool in format [type:]pool:url")
 	flag.Parse()
 	client = collins.New(*user, *pass, *cUrl)
 
