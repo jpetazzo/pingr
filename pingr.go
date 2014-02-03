@@ -61,8 +61,11 @@ func ping(tUrl *url.URL) error {
 }
 
 func pingTcp(tUrl *url.URL) error {
-	_, err := net.DialTimeout(tUrl.Scheme, tUrl.Host, *connectionTimeout)
-	return err
+	conn, err := net.DialTimeout(tUrl.Scheme, tUrl.Host, *connectionTimeout)
+	if err != nil {
+		return err
+	}
+	return conn.Close()
 }
 
 func pingHttp(tUrl *url.URL) error {
@@ -104,7 +107,7 @@ func isAlive(tag, tType string, port int, pool, path string) error {
 	}
 	tUrl := &url.URL{
 		Scheme: tType,
-		Path: path,
+		Path:   path,
 	}
 	urls := []*url.URL{}
 	for _, address := range addresses.Data.Addresses {
@@ -187,7 +190,7 @@ func handler(w http.ResponseWriter, r *http.Request) {
 	tType := path[1]
 	portS := path[2]
 	aType := path[3]
-	tPath := "" 
+	tPath := ""
 	if len(path) > 4 {
 		tPath = strings.Join(path[4:], "/")
 	}
