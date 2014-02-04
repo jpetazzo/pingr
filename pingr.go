@@ -119,25 +119,22 @@ func isAlive(tag, tType string, port int, pool, path string) error {
 	}
 
 	errChan := make(chan error, len(urls))
-	closeChan := make(chan bool)
 	defer close(errChan)
-	defer close(closeChan)
 	for _, tUrl := range urls {
 		go func(tUrl *url.URL) {
-			select {
-			case errChan <- ping(tUrl):
-			case <-closeChan:
-				return
-			}
+			errChan <- ping(tUrl)
 		}(tUrl)
 	}
 
+	statuses := []string{}
 	for i := 0; i < cap(errChan); i++ {
 		err := <-errChan
 		if err != nil {
-			closeChan <- true
-			return err
+			statuses = append(statuses, err.Error())
 		}
+	}
+	if len(statuses) > 0 {
+		return errors.New(strings.Join(statuses, ", "))
 	}
 	return nil
 
