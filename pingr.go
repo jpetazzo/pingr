@@ -65,6 +65,23 @@ func pingTcp(tUrl *url.URL) error {
 	if err != nil {
 		return err
 	}
+	// If a path was specified, look for it in the TCP connection output.
+	if tUrl.Path != "" {
+		conn.SetDeadline(time.Now().Add(*readWriteTimeout))
+		accum := ""
+		// There is no exit condition, because conn.Read will eventually timeout.
+		for {
+			buffer := make([]byte, 512)
+			n, err := conn.Read(buffer)
+			if err != nil {
+				return err
+			}
+			accum += string(buffer[:n])
+			if strings.Contains(accum, tUrl.Path) {
+				return nil
+			}
+		}
+	}
 	return conn.Close()
 }
 
